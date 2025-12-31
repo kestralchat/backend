@@ -1160,6 +1160,7 @@ dependencies = [
  "rocket",
  "rocket_okapi",
  "schemars 0.9.0",
+ "sentry",
  "serde",
  "serde_json",
 ]

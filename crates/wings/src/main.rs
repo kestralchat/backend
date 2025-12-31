@@ -5,8 +5,9 @@ extern crate serde_json;
 pub mod routes;
 
 use kestrel_config::config;
-use rocket::{Build, Rocket, launch};
 use rocket::fairing::AdHoc;
+use rocket::{Build, Rocket, launch};
+use sentry;
 use std::net::Ipv4Addr;
 
 /// Build and configure the Rocket instance for the web server.
@@ -22,17 +23,61 @@ pub async fn web() -> Rocket<Build> {
 
     let sentry_guard = kestrel_config::setup_logging(
         concat!(env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")),
-        dsn,
+        dsn.clone(),
     )
     .await;
 
-    let swagger = rocket_okapi::swagger_ui::make_swagger_ui(
-        &rocket_okapi::swagger_ui::SwaggerUIConfig {
+    let sentry_guard = if sentry_guard.is_some() {
+        sentry_guard
+    } else if !dsn.is_empty() {
+        let guard = sentry::init(sentry::ClientOptions {
+            dsn: dsn.parse().ok(),
+            release: Some(concat!(env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")).into()),
+            environment: Some(
+                if config.is_production {
+                    "production"
+                } else {
+                    "development"
+                }
+                .into(),
+            ),
+            ..Default::default()
+        });
+        // Register a panic hook that captures panics and forwards them to Sentry.
+        std::panic::set_hook(Box::new(|info| {
+            let payload = info.payload();
+            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                *s
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.as_str()
+            } else {
+                "panic"
+            };
+
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()))
+                .unwrap_or_default();
+
+            let full = if location.is_empty() {
+                format!("panic: {}", msg)
+            } else {
+                format!("panic at {}: {}", location, msg)
+            };
+
+            kestrel_config::capture_message(&full, kestrel_config::Level::Fatal);
+        }));
+        Some(guard)
+    } else {
+        None
+    };
+
+    let swagger =
+        rocket_okapi::swagger_ui::make_swagger_ui(&rocket_okapi::swagger_ui::SwaggerUIConfig {
             url: "/openapi.json".to_owned(),
             ..Default::default()
-        },
-    )
-    .into();
+        })
+        .into();
 
     let mut rocket = rocket::build();
 
@@ -45,7 +90,10 @@ pub async fn web() -> Rocket<Build> {
     rocket = rocket.attach(AdHoc::on_response("sentry-report", |req, res| {
         Box::pin(async move {
             if res.status().class().is_server_error() {
-                kestrel_config::capture_message(&format!("{} {} -> {}", req.method(), req.uri(), res.status()), kestrel_config::Level::Error);
+                kestrel_config::capture_message(
+                    &format!("{} {} -> {}", req.method(), req.uri(), res.status()),
+                    kestrel_config::Level::Error,
+                );
             }
         })
     }));
