@@ -3,7 +3,7 @@ extern crate rocket_okapi;
 extern crate serde_json;
 
 pub mod routes;
-pub mod errors;
+pub mod util;
 
 use kestrel_config::config;
 use rocket::fairing::AdHoc;
@@ -113,12 +113,12 @@ pub async fn web() -> Rocket<Build> {
         .register(
             "/",
             rocket::catchers![
-                errors::default_catcher,
-                errors::bad_request,
-                errors::unauthorized,
-                errors::forbidden,
-                errors::not_found,
-                errors::internal_error,
+                util::errors::default_catcher,
+                util::errors::bad_request,
+                util::errors::unauthorized,
+                util::errors::forbidden,
+                util::errors::not_found,
+                util::errors::internal_error,
             ],
         )
         .configure(rocket::Config {
